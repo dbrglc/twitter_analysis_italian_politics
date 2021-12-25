@@ -12,23 +12,81 @@ knitr::opts_chunk$set(echo = TRUE)
 # Analisi dei tweet dei maggiori politici italiani
 
 ## Libraries
+
 ```{r library, echo=FALSE}
-# library("rjson")
+library('stringr')
 library('jsonlite')
+library('dplyr')
+library('tidytext')
+politici = c('Giuseppe Conte', 'Luigi Di Maio', 'Giorgia Meloni', 'Matteo Renzi', 'Matteo Salvini')
 ```
 
 ## Read JSON
 
 ```{r cars, echo=FALSE}
-# Give the input file name to the function.
-result = fromJSON("files/Conte.json")
-json_data_frame = as.data.frame(result)
-rm(result)
+lista_json = list.files(path = "./files/", pattern = "\\.json$")
+lista_json =  sort(lista_json)
+tweet_per_politico = c()
+
+i=1
+for (file_name in lista_json) {
+  tweet_per_politico[[ politici[[i]] ]] = as.data.frame(fromJSON(paste("./files/", file_name, sep = "")))
+  i = i+1
+}
+
+rm(file_name, lista_json, i)
 ```
 
 ## Including Plots
 
 ```{r pressure, echo=FALSE}
+tweet_per_politico_unnest = c()
+i=1
 
+for (tweet in tweet_per_politico) {
+  politico_text_tweet = tweet %>%
+    select(data.id, data.text)
+  
+  tweet_per_politico_unnest[[ politici[[i]] ]] = unnest_tokens(tbl = politico_text_tweet, input = data.text, output = word)
+  i = i+1
+}
+
+rm(politico_text_tweet, tweet, i)
 ```
 
+## Including Plots
+
+```{r pressure, echo=FALSE}
+# italian stop words
+italian_stop_words = as.data.frame( append(stopwords::stopwords('italian'), c('t.co','https')) )
+colnames(italian_stop_words) = c('word')
+
+tweet_per_politico_unnest_stop = c()
+i=1
+
+for (tweet in tweet_per_politico_unnest) {
+  # remove stop words
+  tweet_per_politico_unnest_stop[[ politici[[i]] ]] = tweet %>%
+    anti_join(italian_stop_words) %>%
+    count(word, sort = TRUE)
+  
+  # word frequency
+  print( tweet_per_politico_unnest_stop[[ politici[[i]] ]] )
+  
+  # plot word frequency
+  print( tweet_per_politico_unnest_stop[[ politici[[i]] ]] %>%
+    slice(1:10) %>%
+    mutate(word = reorder(word, n)) %>%
+    ggplot(aes(word, n)) +
+    geom_col() +
+    ggtitle(paste('Parole più frequenti nei tweet di', politici[i])) +
+    xlab('Parole') +
+    ylab('Frequenze assolute') +
+    coord_flip() +
+    theme_classic()
+  )
+  i = i+1
+}
+
+rm(italian_stop_words, tweet, i)
+```
