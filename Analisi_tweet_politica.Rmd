@@ -11,17 +11,19 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Analisi dei tweet dei maggiori politici italiani
 
-## Libraries
+## Definizione di tutte le librerie
 
 ```{r library, echo=FALSE}
 library('stringr')
 library('jsonlite')
 library('dplyr')
 library('tidytext')
+library('tidyr')
+library('ggplot2')
 politici = c('Giuseppe Conte', 'Luigi Di Maio', 'Giorgia Meloni', 'Matteo Renzi', 'Matteo Salvini')
 ```
 
-## Read JSON
+## Lettura dei JSON e pulizia del dataframe
 
 ```{r cars, echo=FALSE}
 lista_json = list.files(path = "./files/", pattern = "\\.json$")
@@ -30,51 +32,56 @@ tweet_per_politico = c()
 
 i=1
 for (file_name in lista_json) {
-  tweet_per_politico[[ politici[[i]] ]] = as.data.frame(fromJSON(paste("./files/", file_name, sep = "")))
+  tweet_per_politico[[ politici[[i]] ]] = as.data.frame(fromJSON(paste("./files/", file_name, sep = ""))) %>%
+    unnest(c('data.public_metrics', 'data.referenced_tweets'), names_repair = 'unique') %>%
+    rename( retweet.type = type,
+            retweet.id = id
+          )
+  
+  tweet_per_politico[[ politici[[i]] ]] $media_keys = NULL
+    
   i = i+1
 }
 
 rm(file_name, lista_json, i)
 ```
 
-## Including Plots
+## Divisione di tutti i tweet per parola e rimozione stop words
 
 ```{r pressure, echo=FALSE}
-tweet_per_politico_unnest = c()
-i=1
-
-for (tweet in tweet_per_politico) {
-  politico_text_tweet = tweet %>%
-    select(data.id, data.text)
-  
-  tweet_per_politico_unnest[[ politici[[i]] ]] = unnest_tokens(tbl = politico_text_tweet, input = data.text, output = word)
-  i = i+1
-}
-
-rm(politico_text_tweet, tweet, i)
-```
-
-## Including Plots
-
-```{r pressure, echo=FALSE}
-# italian stop words
+# stop words italiane
 italian_stop_words = as.data.frame( append(stopwords::stopwords('italian'), c('t.co','https')) )
 colnames(italian_stop_words) = c('word')
 
 tweet_per_politico_unnest_stop = c()
 i=1
 
-for (tweet in tweet_per_politico_unnest) {
-  # remove stop words
-  tweet_per_politico_unnest_stop[[ politici[[i]] ]] = tweet %>%
+for (tweet in tweet_per_politico) {
+  politico_text_tweet = tweet %>%
+    select(data.id, data.text)
+  
+  # unnest token e rimozione delle stop words
+  tweet_per_politico_unnest_stop[[ politici[[i]] ]] = unnest_tokens(tbl = politico_text_tweet, input = data.text, output = word) %>%
     anti_join(italian_stop_words) %>%
     count(word, sort = TRUE)
   
-  # word frequency
-  print( tweet_per_politico_unnest_stop[[ politici[[i]] ]] )
+  i = i+1
+}
+
+rm(italian_stop_words, politico_text_tweet, tweet, i)
+```
+
+## Parole più frequenti per politico
+
+```{r pressure, echo=FALSE}
+i=1
+
+for (tweet in tweet_per_politico_unnest_stop) {
+  # Frequenza di ogni parola
+  print( tweet )
   
-  # plot word frequency
-  print( tweet_per_politico_unnest_stop[[ politici[[i]] ]] %>%
+  # Frequenza di ogni parola graficata
+  print( tweet %>%
     slice(1:10) %>%
     mutate(word = reorder(word, n)) %>%
     ggplot(aes(word, n)) +
@@ -88,5 +95,43 @@ for (tweet in tweet_per_politico_unnest) {
   i = i+1
 }
 
-rm(italian_stop_words, tweet, i)
+rm(tweet, i)
+```
+
+## Tweet con più like e con più risposte per politico
+
+```{r pressure, echo=FALSE}
+for (tweet in tweet_per_politico) {
+  # Tweet con più like
+  tweet[ order( tweet$like_count, decreasing = TRUE) , ] %>%
+    slice(1:10) %>%
+    select(data.text, like_count) %>%
+    print()
+  
+  # Tweet con più retweet
+  tweet[ order( tweet$retweet_count, decreasing = TRUE) , ] %>%
+    slice(1:10) %>%
+    select(data.text, retweet_count) %>%
+    print()
+  
+  # Tweet con più risposte
+  tweet[ order( tweet$reply_count, decreasing = TRUE) , ] %>%
+    slice(1:10) %>%
+    select(data.text, reply_count) %>%
+    print()
+  
+  # Tweet con più citazioni
+  tweet[ order( tweet$quote_count, decreasing = TRUE) , ] %>%
+    slice(1:10) %>%
+    select(data.text, quote_count) %>%
+    print()
+}
+
+rm(tweet)
+```
+
+##
+
+```{r pressure, echo=FALSE}
+
 ```
