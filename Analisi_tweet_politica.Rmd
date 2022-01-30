@@ -567,23 +567,41 @@ sentimenti_globali = sentimenti_globali %>%
   group_by(entity.name) %>%
   summarise(sentimento_globale = sum(relazione_standard) / 5  ) 
 
-sentimenti_globali %>%
+ultimi_5 = sentimenti_globali %>%
   arrange(sentimento_globale) %>%
-  slice(1:5) %>% 
-  print()
+  slice(1:5)
 
-sentimenti_globali %>%
+ultimi_5 = ggplot(ultimi_5,
+       aes(x = reorder(entity.name, sentimento_globale), y = - sentimento_globale)) +
+  ggtitle("Politici con più animosità") +
+  geom_col() +
+  labs(x = "Politici",
+       y = "Animosità") +
+  theme_minimal()
+
+ggplotly(ultimi_5)
+
+primi_5 = sentimenti_globali %>%
   arrange(desc(sentimento_globale)) %>%
-  slice(1:5) %>% 
-  print()
+  slice(1:5)
 
-rm(i, max, min, sentimenti_globali, sentimenti_standard, sentimenti, vocabolariMadda, itastopwords, tweet)
+primi_5 = ggplot(primi_5, aes(x = reorder(entity.name, -sentimento_globale), y = sentimento_globale )) +
+  ggtitle("Politici che generano più simpatia") +
+  geom_col() +
+  labs(x = "Politici", y = "Simpatia") +
+  theme_minimal()
+
+ggplotly(primi_5)
+
+rm(i, max, min, sentimenti_globali, sentimenti_standard, sentimenti, vocabolariMadda, itastopwords, tweet, primi_5, ultimi_5)
 ```
 
-La prima tabella rappresenta i 5 politici con cui queste 5 politici presi in esame hanno dei rapporti d'animosità.
-La seconda tabella riporta i 5 politici per i quali hanno mediamente speso buone parole.
+La prima tabella rappresenta i 5 politici con cui queste 5 persone presi in esame hanno dei rapporti lavorativi d'animosità.
+Invece, la seconda tabella riporta i 5 politici per i quali hanno mediamente speso buone parole.
 
 Si può vedere come **Giuseppe Conte** e **Laura Boldrini** siano i politici italiani con cui questi 5 utenti hanno maggiore affinità.
 D'altro canto si può osservare come 3 delle 5 persone prese in esame siano finiti nella classifica per animosità. L'unico escluso da ambo le classifiche sembra essere **Luigi di Maio**.
+
+## Possibili idee per uno sviluppo
 
 Un possibile svolgimento futuro potrebbe essere il poter iterare quest'analisi nel corso degli anni, per fare ciò sarebbe necessario ottenere la modalità Ricerca Accademica di Twitter 
