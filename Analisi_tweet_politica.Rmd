@@ -1,44 +1,89 @@
 ---
-title: "Analisi_tweet_politica"
-author: "D'Abrosca"
+title: "Analisi dei Tweet dei politici Italiani"
+author: "D'Abrosca Gianluca"
 date: "17/12/2021"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(
+	echo = FALSE,
+	fig.align = "center",
+	message = FALSE,
+	warning = FALSE,
+	cache = FALSE
+)
+```
+ 
+## Introduzione
+
+Presi alcuni politici italiani si vuole capire se dall'analisi di un social media, in questo caso Twitter, si possa intuire qualche informazione riguardo l'ideologia politica delle persone prese in esame.
+Sono state scelte 5 persone sulla base di alcuni fattori:
+
+- La frequenza della pubblicazione su Twitter
+- L'influenza politica come riportato su questo [Sito](https://www.true-news.it/politics/politici-social-network-top-10-piu-seguiti-italia-mondo) 
+- Il numero di seguaci
+
+Sono stati scelti in particolare Giuseppe Conte, Luigi di Maio, Giorgia Meloni, Matteo Renzi e Matteo Salvini.
+
+```{r definizione delle librerie, include=FALSE}
+library(TextWiller)
+library(tidyverse)
+library(tidytext)
+library(jsonlite)
+library(ggplot2)
+library(stringr)
+library(igraph)
+library(ggraph)
+library(plotly)
+library(tidyr)
+library(dplyr)
+library(DT)
+politici = c('Giuseppe Conte', 'Luigi di Maio', 'Giorgia Meloni', 'Matteo Renzi', 'Matteo Salvini')
 ```
 
-# Analisi dei tweet dei maggiori politici italiani
+Per l'estrazione dei tweet si è usata l'API fornita da Twitter stesso.
+Purtroppo, per le limitazioni poste dalla stessa azienda, il numero di tweet estraibili non può superare 3200.
+Per questo passaggio si è creato uno script in Python che permette l'estrazione consecutiva a ritroso dei tweet e li fonde insieme per creare un unico file .json contente tutti i 3200 per l'utente richiesto. [Script Python](https://github.com/dbrglc/scraper_twitter)
+Quindi sono stati estratti gli ultimi 3200 tweet per ogni politico.
 
-## Definizione di tutte le librerie
+Oltre al testo del tweet è stato possibili estrarre anche le seguenti informazioni per messaggio:
 
-```{r library, echo=FALSE}
-library('stringr')
-library('jsonlite')
-library('dplyr')
-library('tidytext')
-library('tidyr')
-library('ggplot2')
-politici = c('Giuseppe Conte', 'Luigi Di Maio', 'Giorgia Meloni', 'Matteo Renzi', 'Matteo Salvini')
-```
+- La data di pubblicazione
+- Il codice univoco
+- I conteggi di like, risposte e retweet
+- Le menzioni dei nomi utenti
+- Il nome di persone influenti menzionate e il loro relativo campo d'interesse. (Per esempio, menzionando Joe Biden si ha come dominio d'interesse la politica)
 
-## Lettura dei JSON e pulizia del dataframe
+Queste non sono le uniche informazioni ottenibili dall'API, ma dato che le altre non verranno utilizzate si è deciso di eliminarle dal dataset per renderlo più leggero possibile.
+In seguito si ottengono le informazioni dai 5 file .json, si adegua il dataset ottenuto e si selezionano le informazioni importanti.
 
-```{r cars, echo=FALSE}
-lista_json = list.files(path = "./files/", pattern = "\\.json$")
+```{r importo e pulisco il dataset, include=FALSE}
+lista_json = list.files(path = "./files/tweets/", pattern = "\\.json$")
 lista_json =  sort(lista_json)
 tweet_per_politico = c()
 
 i=1
 for (file_name in lista_json) {
-  tweet_per_politico[[ politici[[i]] ]] = as.data.frame(fromJSON(paste("./files/", file_name, sep = ""))) %>%
+  tweet_per_politico[[ politici[[i]] ]] = as.data.frame(fromJSON(paste("./files/tweets/", file_name, sep = ""))) %>%
     unnest(c('data.public_metrics', 'data.referenced_tweets'), names_repair = 'unique') %>%
     rename( retweet.type = type,
             retweet.id = id
-          )
-  
-  tweet_per_politico[[ politici[[i]] ]] $media_keys = NULL
+          ) %>%
+    mutate( year= format(as.POSIXct(data.created_at, format="%Y-%m-%dT%H:%M:%OSZ", tz=""), format = "%Y"), 
+            month= format(as.POSIXct(data.created_at, format="%Y-%m-%dT%H:%M:%OSZ", tz=""), format = "%m"),
+            day= format(as.POSIXct(data.created_at, format="%Y-%m-%dT%H:%M:%OSZ", tz=""), format = "%d")
+            ) %>%
+    select(c("data.id",
+             "data.context_annotations",
+             "like_count",
+             "quote_count",
+             "retweet_count",
+             "reply_count",
+             "data.text",
+             "year", "month", "day",
+             "data.entities",
+             ))
     
   i = i+1
 }
@@ -46,11 +91,191 @@ for (file_name in lista_json) {
 rm(file_name, lista_json, i)
 ```
 
-## Divisione di tutti i tweet per parola e rimozione stop words
+Una volta ottenuto il dataset, mi sono posto domande basate su curiosità per provare a rispondere usando i dati in possesso.
 
-```{r pressure, echo=FALSE}
+## Chi è il politico mensilmente più attivo su Twitter?
+
+Dato il limite di 3200 tweet per politico non si può avere lo storico di tutti i tweet per ogni utente.
+Però può essere interessante paragonare la presenza sul social tra vari politici.
+
+```{r mostra frequenza dei tweet pubblicati, include=FALSE}
+i= 1
+numero_di_tweet_per_mese = c()
+frequenze_mensili = NULL
+
+for (tweet in tweet_per_politico) {
+  numero_di_tweet_per_mese[[ politici[[i]] ]] = tweet %>%
+    count(year, month, name = politici[[i]])
+  
+  i = i+1
+}
+
+i= 1
+
+for (tweet in numero_di_tweet_per_mese) {
+  if(i == 1) {
+    frequenze_mensili = tweet
+  } else {
+    y = tweet
+    frequenze_mensili = full_join(frequenze_mensili, y, by = c("year", "month"))
+  }
+  
+  i = i+1
+}
+
+frequenze_mensili = frequenze_mensili %>%
+  arrange(year, month) %>%
+  mutate(asse_x = paste(year, month, sep = ' - '))
+  
+rm(i, tweet, y, numero_di_tweet_per_mese)
+```
+
+In questo caso si è fatto uso di un *full join* in quanto è possibile che per un determinato periodo uno degli utenti non abbia pubblicato tweet oppure abbia già raggiunto il limite dei 3200 tweet.
+
+```{r mostra frequenze mensili}
+xaxis <- list(title = "",
+             showgrid = FALSE,
+             zeroline = FALSE,
+             showline = FALSE,
+             visible = FALSE,
+             gridcolor = '#00FFFFFF',
+             showticklabels = FALSE)
+
+yaxis <- list(title = "",
+              showline = TRUE,
+              showgrid = TRUE,
+              showticklabels = TRUE,
+              linecolor = 'rgb(204, 204, 204)',
+              linewidth = 2,
+              autotick = TRUE,
+              ticks = 'outside',
+              tickcolor = 'rgb(204, 204, 204)',
+              tickwidth = 2,
+              ticklen = 5,
+              tickfont = list(family = 'Arial',
+                              size = 12,
+                              color = 'rgb(82, 82, 82)'))
+
+margin <- list(autoexpand = FALSE,
+              l = 100,
+              r = 200,
+              t = 110)
+
+salvini = min(which(!is.na(frequenze_mensili$`Matteo Salvini`)))
+conte = min(which(!is.na(frequenze_mensili$`Giuseppe Conte`)))
+maio = min(which(!is.na(frequenze_mensili$`Luigi di Maio`)))
+meloni = min(which(!is.na(frequenze_mensili$`Giorgia Meloni`)))
+renzi = min(which(!is.na(frequenze_mensili$`Matteo Renzi`)))
+
+salvini_ann <- list(
+  xref = 'x',
+  yref = 'y',
+  x = frequenze_mensili$asse_x[salvini],
+  y = frequenze_mensili$`Matteo Salvini`[salvini],
+  xanchor = 'right',
+  yanchor = 'middle',
+  text = paste('Salvini ', frequenze_mensili$month[salvini], '-', frequenze_mensili$year[salvini]),
+  font = list(family = 'Arial',
+              size = 16,
+              color = 'rgba(67,67,67,1)'),
+  showarrow = FALSE)
+
+conte_ann <- list(
+  xref = 'x',
+  yref = 'y',
+  x = frequenze_mensili$asse_x[conte],
+  y = frequenze_mensili$`Giuseppe Conte`[conte],
+  xanchor = 'right',
+  yanchor = 'top',
+  text = paste('Conte ', frequenze_mensili$month[conte], '-', frequenze_mensili$year[conte]),
+  font = list(family = 'Arial',
+              size = 16,
+              color = 'rgba(67,67,67,1)'),
+  showarrow = FALSE)
+
+maio_ann <- list(
+  xref = 'x',
+  yref = 'y',
+  x = frequenze_mensili$asse_x[maio],
+  y = frequenze_mensili$`Luigi di Maio`[maio],
+  xanchor = 'right',
+  yanchor = 'middle',
+  text = paste('Maio ', frequenze_mensili$month[maio], '-', frequenze_mensili$year[maio]),
+  font = list(family = 'Arial',
+              size = 16,
+              color = 'rgba(67,67,67,1)'),
+  showarrow = FALSE)
+
+meloni_ann <- list(
+  xref = 'x',
+  yref = 'y',
+  x = frequenze_mensili$asse_x[meloni],
+  y = frequenze_mensili$`Giorgia Meloni`[meloni],
+  xanchor = 'right',
+  yanchor = 'middle',
+  text = paste('Meloni ', frequenze_mensili$month[meloni], '-', frequenze_mensili$year[meloni]),
+  font = list(family = 'Arial',
+              size = 16,
+              color = 'rgba(67,67,67,1)'),
+  showarrow = FALSE)
+
+renzi_ann <- list(
+  xref = 'x',
+  yref = 'y',
+  x = frequenze_mensili$asse_x[renzi],
+  y = frequenze_mensili$`Matteo Renzi`[renzi],
+  xanchor = 'right',
+  yanchor = 'middle',
+  text = paste('Renzi ', frequenze_mensili$month[renzi], '-', frequenze_mensili$year[renzi]),
+  font = list(family = 'Arial',
+              size = 16,
+              color = 'rgba(67,67,67,1)'),
+  showarrow = FALSE)
+
+type = 'scatter'
+mode = 'lines+markers'
+width = 2
+
+fig <- plot_ly(frequenze_mensili, x = ~asse_x) 
+fig <- fig %>% add_trace(y = frequenze_mensili$`Matteo Salvini`, name = 'Matteo Salvini', type = type, mode = mode, line = list(color = '#800000', width = width))  
+fig <- fig %>% add_trace(y = frequenze_mensili$`Luigi di Maio`, name = 'Luigi di Maio',type = type, mode = mode, line = list(color = '#f58231', width = width))
+fig <- fig %>% add_trace(y = frequenze_mensili$`Giuseppe Conte`, name = 'Giuseppe Conte', type = type, mode = mode, line = list(color = '#469990', width = width))  
+fig <- fig %>% add_trace(y = frequenze_mensili$`Giorgia Meloni`, name = 'Giorgia Meloni',type = type, mode = mode, line = list(color = '#fabed4', width = width))
+fig <- fig %>% add_trace(y = frequenze_mensili$`Matteo Renzi`, name = 'Matteo Renzi',type = type, mode = mode, line = list(color = '#000000', width = width))
+fig <- fig %>% layout(xaxis = xaxis,
+                      yaxis = yaxis,
+                      margin = margin,
+                      autosize = TRUE,
+                      showlegend = TRUE)
+fig <- fig %>% layout(annotations = salvini_ann)
+fig <- fig %>% layout(annotations = maio_ann)
+fig <- fig %>% layout(annotations = conte_ann)
+fig <- fig %>% layout(annotations = meloni_ann)
+fig <- fig %>% layout(annotations = renzi_ann)
+
+fig
+
+rm(xaxis, yaxis, margin, salvini_ann, maio_ann, conte_ann, meloni_ann, renzi_ann, fig, type, mode, width, salvini, conte, maio, meloni, renzi, frequenze_mensili)
+```
+
+Segue che **Matteo Salvini** sembra il politico che posta di più su Twitter, o per lo meno nel periodo da Gennaio 2021 a Settembre 2021.
+Purtroppo non è possibile esaminare precedentemente a quella data perchè è stato il primo a raggiungere il limite dell'API.
+
+Contrariamente pare che **Giuseppe Conte** non sia nemmeno arrivato al limite dei 3200 tweet, con un minimale di 2 tweet a Febbraio 2021.
+Si controlla in seguito il numero dei suoi tweet totali.
+
+```{r controllo conte sommatoria minore di 3200}
+print(unlist(count(tweet_per_politico$`Giuseppe Conte`)))
+```
+
+## Le parole più usate nei tweet possono essere significative per dare un contesto politico?
+
+Si vuole analizzare la frequenza delle parole per poi osservare quelle più usate e cercare di trarre qualcosa del contesto.
+Per fare ciò bisogna però eliminare le stop words, che in italiano si possono trovare nel pacchetto *stopwords* di R.
+
+```{r rimozione delle stop words, include=FALSE}
 # stop words italiane
-italian_stop_words = as.data.frame( append(stopwords::stopwords('italian'), c('t.co','https')) )
+italian_stop_words = as.data.frame( append(stopwords::stopwords('italian'), c('t.co','https','grazie','oggi')) )
 colnames(italian_stop_words) = c('word')
 
 tweet_per_politico_unnest_stop = c()
@@ -62,7 +287,7 @@ for (tweet in tweet_per_politico) {
   
   # unnest token e rimozione delle stop words
   tweet_per_politico_unnest_stop[[ politici[[i]] ]] = unnest_tokens(tbl = politico_text_tweet, input = data.text, output = word) %>%
-    anti_join(italian_stop_words) %>%
+    anti_join(italian_stop_words, by='word') %>%
     count(word, sort = TRUE)
   
   i = i+1
@@ -71,18 +296,13 @@ for (tweet in tweet_per_politico) {
 rm(italian_stop_words, politico_text_tweet, tweet, i)
 ```
 
-## Parole più frequenti per politico
-
-```{r pressure, echo=FALSE}
+```{r parole più frequenti per politico}
 i=1
 
 for (tweet in tweet_per_politico_unnest_stop) {
-  # Frequenza di ogni parola
-  print( tweet )
-  
   # Frequenza di ogni parola graficata
   print( tweet %>%
-    slice(1:10) %>%
+    slice(1:5) %>%
     mutate(word = reorder(word, n)) %>%
     ggplot(aes(word, n)) +
     geom_col() +
@@ -95,43 +315,275 @@ for (tweet in tweet_per_politico_unnest_stop) {
   i = i+1
 }
 
-rm(tweet, i)
+rm(tweet, i, tweet_per_politico_unnest_stop)
 ```
 
-## Tweet con più like e con più risposte per politico
+Per la maggior parte degli utenti si può osservare come la parola **rt** sia al primo posto.
+Questa informazione fa capire come il tema del COVID-19 sia stato influente nei social anche per i politici e da un'idea del contesto storico da cui questi tweet sono stati estratti, nonostante la variabilità dei mesi dovuta alla frequenza di pubblicazione precedentemente vista.
 
-```{r pressure, echo=FALSE}
+Un'altra informazione molto interessante è che tra le prime posizioni si può osservare il partito politico di appartenenza nella maggior parte degli utenti.
+Purtroppo non si può fare ciecamente affidamento ai dati, in particolare in quinta posizione per **Giorgia Meloni** si osserva la parola **sinistra**, nonostante il partito politico di cui è presidente sia di destra e estrema destra, secondo Wikipedia.
+
+```{r meloni analisi sinistra}
+tweet_per_politico$`Giorgia Meloni` %>%
+  filter( grepl('sinistra', data.text, fixed = TRUE) ) %>%
+  select(data.text) %>%
+  slice(1:10)
+```
+
+Infatti, provando a contestualizzare si può osservare come Giorgia Meloni menzioni la sinistra per screditarla e non per favorirla.
+
+## Dai Tweet con più like o più risposte di un politico si può capire qualcosa dalla sua inclinazione politica?
+
+Avendo a disposizione dei contatori si vuole verificare se c'è un legame tra il numero di like e l'importanza politica del messaggio.
+
+```{r tweet con più like}
+i= 1
 for (tweet in tweet_per_politico) {
+  print(paste('Per ', politici[[i]], ' si ha:', sep=''))
+  
   # Tweet con più like
   tweet[ order( tweet$like_count, decreasing = TRUE) , ] %>%
-    slice(1:10) %>%
+    slice(1:3) %>%
     select(data.text, like_count) %>%
     print()
   
-  # Tweet con più retweet
-  tweet[ order( tweet$retweet_count, decreasing = TRUE) , ] %>%
-    slice(1:10) %>%
-    select(data.text, retweet_count) %>%
-    print()
+  i = i+1
+}
+
+rm(tweet, i)
+```
+
+Non sembra esserci una strettissima relazione tra le due variabili, infatti 3 politici hanno come messaggio con più like uno basato su battaglie personali piuttosto che politiche.
+Invece, si può pensare che un messaggio con tante risposte possa essere critico e dividere l'opinione pubblica, ma sarà veramente cosí?
+Si provano ad osservare 3 messaggi con più risposte per ogni politico.
+
+```{r tweet con più risposte}
+i= 1
+for (tweet in tweet_per_politico) {
+  print(paste('Per ', politici[[i]], ' si ha:', sep=''))
   
   # Tweet con più risposte
   tweet[ order( tweet$reply_count, decreasing = TRUE) , ] %>%
-    slice(1:10) %>%
+    slice(1:3) %>%
     select(data.text, reply_count) %>%
     print()
   
-  # Tweet con più citazioni
-  tweet[ order( tweet$quote_count, decreasing = TRUE) , ] %>%
+  i = i+1
+}
+
+rm(tweet, i)
+```
+
+Tuttavia non sembra così neanche per i messagi con più risposte, solo i messaggi di **Giorgia Meloni** sembrano essere apertamente critici nei confronti di altri politici.
+Anche nel video del primo messaggio critica l'atteggiamento di un politico in una determinata occasione.
+Ma mediamente il numero di risposte non influenza molto sul fatto che il messaggio stesso abbia un contenuto volto a sindacare.
+
+## É possibile estrapolare qualche informazione dalle menzioni delle persone in un tweet
+
+Come si è visto nell'introduzione al dataset, l'API di Twitter permette di estrapolare direttamente il nome di chi viene menzionato e il suo dominio.
+Filtrando il dominio per **Politics** é molto semplice capire quale politico viene menzionato e in quale messaggio.
+
+Inoltre è possibile mostrare anche una classifica degli username più menzionati, questa risulta però spesso inutile in quanto fornisce un nome da decifrare e il nome reale della persona avente quell'username é comunque riportato come detto in precedenza e filtrando per il dominio é anche possibile capire se é un esponente politico o meno.
+
+```{r mostra username menzionati, include=FALSE}
+
+for (tweet in tweet_per_politico) {
+  tweet$data.entities$mentions[ !unlist( lapply(tweet$data.entities$mentions, is.null) ) ]%>%
+    bind_rows() %>%
+    count(username, sort = TRUE) %>%
     slice(1:10) %>%
-    select(data.text, quote_count) %>%
     print()
 }
 
 rm(tweet)
 ```
 
-##
+```{r salva nomi menzionati, include=FALSE}
+i= 1
+nomi_menzionati = c()
 
-```{r pressure, echo=FALSE}
+for (tweet in tweet_per_politico) {
+  nomi_menzionati[[ politici[[i]] ]] = tweet %>%
+    unnest(data.context_annotations) %>%
+    unnest(c('entity','domain'), names_sep = '.') %>%
+    filter(domain.name == 'Politician') %>%
+    anti_join(data.frame(entity.name = c('Dell', politici[[i]] )), by = 'entity.name') %>%
+    count(entity.name, sort = TRUE, name = politici[[i]])
+  
+  i = i+1
+}
 
+i= 1
+
+for (tweet in nomi_menzionati) {
+  if(i == 1) {
+    matrice_adiacenze_rete_sociale = tweet
+  } else {
+    matrice_adiacenze_rete_sociale = full_join(matrice_adiacenze_rete_sociale, tweet, by = c("entity.name"))
+  }
+  
+  i = i+1
+}
+
+matrice_adiacenze_rete_sociale[is.na(matrice_adiacenze_rete_sociale)] = 0
+matrice_adiacenze_rete_sociale
+
+rm(i, tweet)
 ```
+
+```{r mostra nomi menzionati}
+for (tweet in nomi_menzionati) {
+  tweet  %>%
+    slice(1:5) %>%
+    print()
+}
+
+rm(tweet)
+```
+
+## Rete sociale delle menzioni
+
+Dalle precedenti informazioni si vuole cercare di costruire una rete sociale basata sulle menzioni sopracitate.
+
+Per esempio se si volesse avere un'idea
+
+```{r salva rete sociale delle menzioni, include=FALSE}
+rete_sociale = bind_rows('Giuseppe Conte' = rename(nomi_menzionati$`Giuseppe Conte`, 'weight' = 'Giuseppe Conte'),
+                         'Luigi di Maio' = rename(nomi_menzionati$`Luigi di Maio`, 'weight' = 'Luigi di Maio'),
+                         'Giorgia Meloni' = rename(nomi_menzionati$`Giorgia Meloni`, 'weight' = 'Giorgia Meloni'),
+                         'Matteo Salvini' = rename(nomi_menzionati$`Matteo Salvini`, 'weight' = 'Matteo Salvini'),
+                         'Matteo Renzi' = rename(nomi_menzionati$`Matteo Renzi`, 'weight' = 'Matteo Renzi'),
+                         .id='da_citazione')
+
+nomi = sort(unique(matrice_adiacenze_rete_sociale$entity.name))
+matrice_adiacenza = matrix(0, length(nomi), length(nomi), dimnames = list(nomi, nomi))
+matrice_adiacenza[as.matrix(rete_sociale[c("da_citazione", "entity.name")])] <- rete_sociale[["weight"]]
+
+grafo_rete_sociale = graph_from_adjacency_matrix(matrice_adiacenza, weighted = TRUE)
+
+V(grafo_rete_sociale)$grado_in = degree(grafo_rete_sociale, mode = 'in')
+V(grafo_rete_sociale)$grado_out = degree(grafo_rete_sociale, mode = 'out')
+
+grafo_5 = delete_vertices(grafo_rete_sociale,  which(degree(grafo_rete_sociale) < 5))
+
+rm(rete_sociale, nomi)
+```
+
+```{r mostra rete sociale delle menzioni multiple}
+ggraph(grafo_5, layout = "stress") + 
+  geom_edge_link(aes(alpha = weight,
+                     start_cap = label_rect(node1.name), 
+                     end_cap = label_rect(node2.name),
+                     color = node1.name,
+                     filter = ! node2.name %in% politici),
+                 arrow = arrow(type = "closed", length = unit(2, 'mm'))) +
+  geom_node_point(colour = "black") +
+  geom_node_text(aes(label = name), repel=TRUE) +
+  theme_graph(base_family = "")
+
+rm(grafo_5, grafo_rete_sociale, matrice_adiacenza, matrice_adiacenze_rete_sociale, nomi_menzionati)
+```
+
+Se si osserva nei vertici esterni del grafo a stella si possono osservare tutti i politici che vengono citati almeno una volta da ogni utente preso in esame.
+C'è però una discrepanza con la realtà, infatti Narendra Modi risulta essere si un politico di origine indiana, ma la data di fine mandato è segnata essere il 2014, ben prima della prima data presa in esame.
+
+Si va così a esaminare il testo di un messaggio avente lui come menzione.
+
+```{r caso Nerandra Modi}
+tweet_per_politico$`Matteo Salvini` %>%
+  unnest(data.context_annotations) %>%
+  unnest(c('entity','domain'), names_sep = '.') %>%
+  filter(domain.name == 'Politician' & entity.name == 'Narendra Modi') %>%
+  select(data.text) %>%
+  print()
+```
+
+Si vede subito come è vero che Modi compare nel messaggio, ma come al solito il messaggio va contestualizzato e la parola modi non si riferiva affatto al politico.
+Questo insegna che i dati non vanno sempre presi così come vengono, ma vanno interpretati.
+
+## Sentiment Analysis sui tweet per capire quali siano relazioni di amicizia e quali di animosità lavorativa
+
+Per fare questo mi sono servito della libreria **TextWiller** trovabile su [GitHub](https://github.com/livioivil/TextWiller).
+Nel nostro caso si farà uso della funzione **sentiment** che ritorna:
+
+- +1 se la frase esprime un sentimento positivo
+- 0 se la frase non esprime alcun sentimento in particolare
+- -1 se la frase esprime un sentimento negativo
+
+A questo punto sarà possibile poi sommare tutti i punteggi e standardizzarli in un range tra [-1; +1] per poter trovare il tipo di relazione tra politici.
+Una relazione di tipo +1 rappresente un'amicizia lavorativa, al contrario -1 l'opposto.
+
+```{r calcolo sentiment analysis}
+i= 1
+sentimenti = c()
+
+for (tweet in tweet_per_politico) {
+  sentimenti[[ politici[[i]] ]] = tweet %>%
+    unnest(data.context_annotations) %>%
+    unnest(c('entity','domain'), names_sep = '.') %>%
+    filter(domain.name == 'Politician') %>%
+    anti_join(data.frame(entity.name = c('Dell', politici[[i]] )), by = 'entity.name') %>%
+    mutate(sentimento = sentiment(data.text))
+    
+  i = i+1
+}
+
+rm(i)
+```
+
+```{r mostra sentiment analysis}
+i= 1
+sentimenti_standard = c()
+
+for (tweet in sentimenti) {
+  sentimenti_standard[[ politici[[i]] ]] = tweet %>%
+    group_by(entity.name) %>%
+    summarise(relazione = sum(sentimento))
+  
+  max = max(sentimenti_standard[[ politici[[i]] ]]$relazione)
+  min = min(sentimenti_standard[[ politici[[i]] ]]$relazione)
+  
+  sentimenti_standard[[ politici[[i]] ]] = sentimenti_standard[[ politici[[i]] ]] %>%
+    mutate(relazione_standard = (( (relazione - min) / (max - min) - 0.5 ) * 2 ) ) %>%
+    arrange(desc(relazione_standard))
+    
+  i = i+1
+}
+
+i= 1
+
+for (tweet in sentimenti_standard) {
+  if(i == 1) {
+    sentimenti_globali = tweet
+  } else {
+    sentimenti_globali = rbind(sentimenti_globali, tweet)
+  }
+  
+  i = i+1
+}
+
+sentimenti_globali = sentimenti_globali %>%
+  group_by(entity.name) %>%
+  summarise(sentimento_globale = sum(relazione_standard) / 5  ) 
+
+sentimenti_globali %>%
+  arrange(sentimento_globale) %>%
+  slice(1:5) %>% 
+  print()
+
+sentimenti_globali %>%
+  arrange(desc(sentimento_globale)) %>%
+  slice(1:5) %>% 
+  print()
+
+rm(i, max, min, sentimenti_globali, sentimenti_standard, sentimenti, vocabolariMadda, itastopwords, tweet)
+```
+
+La prima tabella rappresenta i 5 politici con cui queste 5 politici presi in esame hanno dei rapporti d'animosità.
+La seconda tabella riporta i 5 politici per i quali hanno mediamente speso buone parole.
+
+Si può vedere come **Giuseppe Conte** e **Laura Boldrini** siano i politici italiani con cui questi 5 utenti hanno maggiore affinità.
+D'altro canto si può osservare come 3 delle 5 persone prese in esame siano finiti nella classifica per animosità. L'unico escluso da ambo le classifiche sembra essere **Luigi di Maio**.
+
+Un possibile svolgimento futuro potrebbe essere il poter iterare quest'analisi nel corso degli anni, per fare ciò sarebbe necessario ottenere la modalità Ricerca Accademica di Twitter 
